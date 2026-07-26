@@ -11,6 +11,8 @@
 #include <memory>
 #include <new>
 
+#include <esp_heap_caps.h>
+
 #include "DirectPixelWriter.h"
 #include "DitherUtils.h"
 #include "PixelCache.h"
@@ -355,7 +357,12 @@ int jpegDrawCallback(JPEGDRAW* pDraw) {
 }  // namespace
 
 bool JpegToFramebufferConverter::getDimensionsStatic(const std::string& imagePath, ImageDimensions& out) {
-  size_t freeHeap = ESP.getFreeHeap();
+  // Total 8-bit-accessible free heap (internal + PSRAM when pooled). The JPEGDEC
+  // object and PixelCache are >4KB so they land in PSRAM on the C61; gating on
+  // internal-only free (ESP.getFreeHeap) wrongly bailed once BLE consumed
+  // internal SRAM even though PSRAM had plenty. On the C3 (no PSRAM) this equals
+  // internal, preserving the original behavior.
+  size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
     return false;
@@ -385,7 +392,12 @@ bool JpegToFramebufferConverter::decodeToFramebuffer(const std::string& imagePat
                                                      const RenderConfig& config) {
   LOG_DBG("JPG", "Decoding JPEG: %s", imagePath.c_str());
 
-  size_t freeHeap = ESP.getFreeHeap();
+  // Total 8-bit-accessible free heap (internal + PSRAM when pooled). The JPEGDEC
+  // object and PixelCache are >4KB so they land in PSRAM on the C61; gating on
+  // internal-only free (ESP.getFreeHeap) wrongly bailed once BLE consumed
+  // internal SRAM even though PSRAM had plenty. On the C3 (no PSRAM) this equals
+  // internal, preserving the original behavior.
+  size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
   if (freeHeap < MIN_FREE_HEAP_FOR_JPEG) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP_FOR_JPEG);
     return false;

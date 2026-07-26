@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <esp_heap_caps.h>
+
 #include "BitmapHelpers.h"
 
 // ============================================================================
@@ -483,8 +485,9 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
                                                      int targetHeight, bool oneBit, bool crop) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
-    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
+  const size_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);  // internal + PSRAM (see JpegToFramebufferConverter)
+  if (freeHeap < MIN_FREE_HEAP) {
+    LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", freeHeap, MIN_FREE_HEAP);
     return false;
   }
 

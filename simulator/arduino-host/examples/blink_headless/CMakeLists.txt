@@ -1,0 +1,2 @@
+add_executable(blink_headless main.cpp)
+target_link_libraries(blink_headless PRIVATE arduino_host)

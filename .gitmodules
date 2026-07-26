@@ -1,0 +1,3 @@
+[submodule "open-onepage-sdk"]
+	path = open-onepage-sdk
+	url = git@github.com:MoveCall/onepage-reader-sdk-arduino.git

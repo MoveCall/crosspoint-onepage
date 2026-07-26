@@ -1,0 +1,16 @@
+{
+  "name": "GfxRenderer",
+  "version": "1.0.0",
+  "description": "Framebuffer text/graphics renderer for the e-ink display",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": {
+    "EpdFont": "*",
+    "InflateReader": "*",
+    "uzlib": "*"
+  },
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}

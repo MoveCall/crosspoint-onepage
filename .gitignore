@@ -1,0 +1,30 @@
+.pio
+.idea
+.DS_Store
+.vscode
+# ESP-IDF component manager download dir — re-fetched during the arduino
+# framework rebuild (driven by .dummy/idf_component.yml). Don't commit (26MB).
+managed_components/
+# WASM simulator build output.
+simulator/build_wasm/
+lib/EpdFont/fontsrc
+lib/I18n/I18nKeys.h
+lib/I18n/I18nStrings.h
+lib/I18n/I18nStrings.cpp
+*.generated.h
+.vs
+build
+**/__pycache__/
+/compile_commands.json
+/.cache
+.history/
+/.venv
+*.local*
+*.cpfont
+lib/EpdFont/scripts/downloaded_fonts/
+lib/EpdFont/scripts/instanced_fonts/
+lib/EpdFont/scripts/output/
+# Claude Code: share project skills with the team, keep local agent state
+# (worktrees, scheduled-task locks, settings.local, scout CLEANUP.md) out.
+.claude/*
+!.claude/skills/

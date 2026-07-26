@@ -1,0 +1,14 @@
+{
+  "name": "InflateReader",
+  "version": "1.0.0",
+  "description": "Streaming DEFLATE reader (wraps uzlib) for compressed fonts and zipped EPUB entries",
+  "frameworks": "*",
+  "platforms": "*",
+  "dependencies": {
+    "uzlib": "*"
+  },
+  "build": {
+    "srcDir": ".",
+    "includeDir": "."
+  }
+}

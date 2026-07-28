@@ -47,6 +47,8 @@ constexpr uint16_t HID_REPORT_CHR_UUID = 0x2A4D;
 constexpr uint16_t CCCD_UUID = 0x2902;
 constexpr uint16_t HID_APPEARANCE_MIN = 0x03C0;
 constexpr uint16_t HID_APPEARANCE_MAX = 0x03C4;
+constexpr uint16_t BATTERY_SVC_UUID = 0x180F;      // standard Battery Service
+constexpr uint16_t BATTERY_LVL_CHR_UUID = 0x2A19;  // Battery Level (uint8 percent)
 
 constexpr size_t MIN_INTERNAL_SRAM = 40 * 1024;
 constexpr size_t QUEUE_DEPTH = 4;
@@ -54,8 +56,16 @@ constexpr size_t QUEUE_DEPTH = 4;
 uint16_t g_connHandle = BLE_HS_CONN_HANDLE_NONE;
 uint16_t g_hidSvcStart = 0;
 uint16_t g_hidSvcEnd = 0;
+uint16_t g_battSvcEnd = 0;      // Battery Service end handle (for descriptor discovery)
+uint16_t g_battChrHandle = 0;   // Battery Level char value handle (0 = none/unknown)
+// Battery discovery must run AFTER both HID discovery completes and the link is
+// encrypted (concurrent GATT discovery collides; the battery read needs auth).
+bool g_hidDiscDone = false;
+bool g_encDone = false;
+bool g_battStarted = false;
 
 void startScan();
+void maybeStartBatteryDiscovery(uint16_t conn);
 
 // --- GATT discovery ---------------------------------------------------------
 
@@ -75,6 +85,11 @@ int onChrDisc(uint16_t conn, const struct ble_gatt_error* error, const struct bl
     if (uuid == HID_REPORT_CHR_UUID && (chr->properties & BLE_GATT_CHR_PROP_NOTIFY)) {
       ble_gattc_disc_all_dscs(conn, chr->val_handle, g_hidSvcEnd, onDescDisc, nullptr);
     }
+  } else if (error->status == BLE_HS_EDONE) {
+    // HID characteristic discovery finished — safe to start battery discovery
+    // now (no longer racing the HID disc chain).
+    g_hidDiscDone = true;
+    maybeStartBatteryDiscovery(conn);
   }
   return 0;
 }
@@ -89,6 +104,61 @@ int onSvcDisc(uint16_t conn, const struct ble_gatt_error* error, const struct bl
   }
   return 0;
 }
+
+// --- Battery Service (0x180F) --------------------------------------------------
+// Read the connected remote's battery level and subscribe to updates. Optional:
+// if the remote has no battery service the read/disc simply find nothing and
+// batteryLevel_ stays -1 (unknown), which the UI renders as "no battery".
+
+int onBattRead(uint16_t conn, const struct ble_gatt_error* error, struct ble_gatt_attr* attr, void* arg) {
+  if (error->status == 0 && attr && attr->om) {
+    uint8_t v = 0;
+    uint16_t len = 0;
+    if (ble_hs_mbuf_to_flat(attr->om, &v, sizeof(v), &len) == 0 && len >= 1) {
+      LOG_INF("BLEHID", "battery level = %u%%", v);
+      BleHidHost::getInstance().setBatteryLevel(v);
+    }
+  } else {
+    LOG_INF("BLEHID", "battery read failed (status=%d)", error ? error->status : -1);
+  }
+  return 0;
+}
+
+int onBattChrDisc(uint16_t conn, const struct ble_gatt_error* error, const struct ble_gatt_chr* chr,
+                  void* arg) {
+  if (error->status == 0 && chr && ble_uuid_u16(&chr->uuid.u) == BATTERY_LVL_CHR_UUID) {
+    g_battChrHandle = chr->val_handle;
+    LOG_INF("BLEHID", "battery char found (handle=%u props=0x%02X)", chr->val_handle, chr->properties);
+    ble_gattc_read(conn, chr->val_handle, onBattRead, nullptr);  // immediate value
+    if (chr->properties & BLE_GATT_CHR_PROP_NOTIFY) {
+      // Reuse onDescDisc — it enables notifications on whatever CCCD it finds.
+      ble_gattc_disc_all_dscs(conn, chr->val_handle, g_battSvcEnd, onDescDisc, nullptr);
+    }
+  }
+  return 0;
+}
+
+int onBattSvcDisc(uint16_t conn, const struct ble_gatt_error* error, const struct ble_gatt_svc* svc,
+                  void* arg) {
+  if (error->status == 0 && svc) {
+    g_battSvcEnd = svc->end_handle;
+    LOG_INF("BLEHID", "battery service found [%u..%u]", svc->start_handle, svc->end_handle);
+    ble_gattc_disc_all_chrs(conn, svc->start_handle, svc->end_handle, onBattChrDisc, nullptr);
+  }
+  return 0;
+}
+
+// Kick off battery discovery ONLY once HID discovery has finished AND the link is
+// encrypted. Running it concurrently with HID discovery collides (NimBLE runs one
+// GATT client procedure at a time) and the battery read needs an encrypted link.
+void maybeStartBatteryDiscovery(uint16_t conn) {
+  if (!g_hidDiscDone || !g_encDone || g_battStarted) return;
+  g_battStarted = true;
+  static const ble_uuid16_t battSvcUuid = BLE_UUID16_INIT(BATTERY_SVC_UUID);
+  const int rc = ble_gattc_disc_svc_by_uuid(conn, &battSvcUuid.u, onBattSvcDisc, nullptr);
+  LOG_INF("BLEHID", "battery svc disc start (rc=%d)", rc);
+}
+
 
 bool advIsHid(const struct ble_hs_adv_fields& fields) {
   for (int i = 0; i < fields.num_uuids16; i++) {
@@ -138,7 +208,12 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
     case BLE_GAP_EVENT_DISC: {
       struct ble_hs_adv_fields fields;
       if (ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data) != 0) return 0;
-      if (!advIsHid(fields)) return 0;
+      // NOTE: don't early-return on !advIsHid here. Many remotes split their
+      // packets: the HID service UUID (0x1812) is in the ADV_IND while the name
+      // is in the SCAN_RSP. Dropping the non-HID scan-response would leave the
+      // device forever "(unnamed)". Pass isHid to onDiscovered, which only ADDS
+      // new entries for HID adverts but always backfills a name for a known one.
+      const bool isHid = advIsHid(fields);
 
       char name[24] = {0};
       if (fields.name_len > 0) {
@@ -149,11 +224,12 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
 
       if (self.mode_ == BleHidHost::Mode::Discovery) {
         // Browsing: collect into the list, do NOT connect.
-        self.onDiscovered(event->disc.addr.val, event->disc.addr.type, name);
+        self.onDiscovered(event->disc.addr.val, event->disc.addr.type, name, isHid);
         return 0;
       }
 
       // Bound mode: only connect to the remembered device.
+      if (!isHid) return 0;
       if (!self.boundValid_) return 0;
       if (memcmp(event->disc.addr.val, self.boundAddr_, 6) != 0) return 0;
 
@@ -178,11 +254,18 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
     case BLE_GAP_EVENT_CONNECT:
       if (event->connect.status == 0) {
         g_connHandle = event->connect.conn_handle;
+        g_battChrHandle = 0;
+        g_hidDiscDone = false;
+        g_encDone = false;
+        g_battStarted = false;
+        self.batteryLevel_ = -1;  // unknown until read (after encryption + HID disc)
         self.state_ = BleHidState::Connected;
         LOG_INF("BLEHID", "connected (handle=%u)", g_connHandle);
         ble_gap_security_initiate(g_connHandle);
         static const ble_uuid16_t hidSvcUuid = BLE_UUID16_INIT(HID_SVC_UUID);
         ble_gattc_disc_svc_by_uuid(g_connHandle, &hidSvcUuid.u, onSvcDisc, nullptr);
+        // Battery Service is discovered/read only after BOTH HID discovery finishes
+        // and the link is encrypted (see maybeStartBatteryDiscovery).
       } else {
         // Connection attempt failed: back off before retrying.
         self.nextConnectAllowedUs_ = esp_timer_get_time() + RECONNECT_BACKOFF_US;
@@ -194,6 +277,8 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
     case BLE_GAP_EVENT_DISCONNECT:
       LOG_INF("BLEHID", "disconnected (reason=%d)", event->disconnect.reason);
       g_connHandle = BLE_HS_CONN_HANDLE_NONE;
+      g_battChrHandle = 0;
+      self.batteryLevel_ = -1;
       self.state_ = BleHidState::Disconnected;
       // Auto-reconnect to the bound device (bound mode), after a backoff so a
       // device that won't complete the handshake can't spin the radio.
@@ -223,6 +308,10 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
         };
         const int rc = ble_gap_update_params(g_connHandle, &params);
         LOG_INF("BLEHID", "requested low-power conn params (rc=%d)", rc);
+        // Link encrypted — battery read is now allowed; start it if HID disc is
+        // already done (else onChrDisc's EDONE will start it).
+        g_encDone = true;
+        maybeStartBatteryDiscovery(g_connHandle);
       }
       return 0;
     }
@@ -236,7 +325,11 @@ int bleHidHostGapEvent(struct ble_gap_event* event, void* arg) {
       uint8_t buf[64];
       if (len > sizeof(buf)) len = sizeof(buf);
       if (ble_hs_mbuf_to_flat(event->notify_rx.om, buf, sizeof(buf), &len) != 0) return 0;
-      self.onReport(event->notify_rx.attr_handle, buf, len);
+      if (g_battChrHandle != 0 && event->notify_rx.attr_handle == g_battChrHandle) {
+        if (len >= 1) self.setBatteryLevel(buf[0]);
+      } else {
+        self.onReport(event->notify_rx.attr_handle, buf, len);
+      }
       return 0;
     }
 
@@ -332,11 +425,12 @@ void BleHidHost::startDiscovery() {
   startScan();
 }
 
-void BleHidHost::onDiscovered(const uint8_t addr[6], uint8_t addrType, const char* name) {
+void BleHidHost::onDiscovered(const uint8_t addr[6], uint8_t addrType, const char* name, bool isHid) {
   // Dedup by address. The device name usually arrives in a SEPARATE advertising
-  // report (the scan response) AFTER the initial connectable advert, so if we
-  // already have this address but no name yet, backfill the name now instead of
-  // dropping the update. Publish count last (barrier for the reader task).
+  // report (the scan response) AFTER the initial connectable advert — and that
+  // scan response often does NOT carry the HID service UUID (isHid=false), so we
+  // still backfill the name for an already-known address. Publish count last
+  // (barrier for the reader task).
   for (uint8_t i = 0; i < scanCount_; i++) {
     if (memcmp(scan_[i].addr, addr, 6) == 0) {
       if (scan_[i].name[0] == '\0' && name && name[0]) {
@@ -348,6 +442,9 @@ void BleHidHost::onDiscovered(const uint8_t addr[6], uint8_t addrType, const cha
       return;
     }
   }
+  // Only ADD a new device from a HID advertisement (a bare scan-response for an
+  // unknown address isn't enough to know it's a page-turner).
+  if (!isHid) return;
   if (scanCount_ >= MAX_SCAN) return;
   BleScanEntry& e = scan_[scanCount_];
   memcpy(e.addr, addr, 6);
@@ -380,6 +477,8 @@ void BleHidHost::connectTo(const uint8_t addr[6], uint8_t addrType) {
 // --- Bound device -----------------------------------------------------------
 
 void BleHidHost::setBoundDevice(const uint8_t addr[6], uint8_t addrType) {
+  // Different address than before? Its cached battery no longer applies.
+  if (memcmp(boundAddr_, addr, 6) != 0) boundBatteryLevel_ = -1;
   memcpy(boundAddr_, addr, 6);
   boundAddrType_ = addrType;
   boundValid_ = true;
@@ -394,6 +493,7 @@ void BleHidHost::clearBoundDevice() {
   boundValid_ = false;
   memset(boundAddr_, 0, 6);
   boundAddrType_ = 0;
+  boundBatteryLevel_ = -1;
 }
 
 // --- Learning ---------------------------------------------------------------

@@ -71,6 +71,18 @@ class BleHidHost {
   BleHidState getState() const { return state_; }
   bool isConnected() const { return state_ == BleHidState::Connected; }
 
+  // Connected remote's battery level (0-100), or -1 if unknown / not connected /
+  // remote has no Battery Service. Set from the BLE task (GATT read + notify).
+  int8_t batteryLevel() const { return batteryLevel_; }
+  void setBatteryLevel(uint8_t pct) {
+    batteryLevel_ = pct > 100 ? 100 : static_cast<int8_t>(pct);
+    boundBatteryLevel_ = batteryLevel_;  // cache for list display while disconnected
+  }
+  // Last-known battery of the bound remote, retained across disconnect (so the
+  // device list can show it while scanning). -1 if never read.
+  int8_t boundBatteryLevel() const { return boundBatteryLevel_; }
+
+
   // --- Discovery / pairing (driven by the pairing UI) ---
   // Enter discovery mode: scan and collect nearby BLE HID devices into a list
   // WITHOUT auto-connecting. Clears any previous scan results.
@@ -120,6 +132,8 @@ class BleHidHost {
 
   bool started_ = false;
   volatile BleHidState state_ = BleHidState::Stopped;
+  volatile int8_t batteryLevel_ = -1;  // connected remote battery % (0-100), -1 = unknown
+  volatile int8_t boundBatteryLevel_ = -1;  // bound remote's last-known battery, kept across disconnect
 
   // Scan mode: Discovery = collect list, don't connect; Bound = connect only to
   // the bound device when its advertisement is seen.
@@ -156,8 +170,10 @@ class BleHidHost {
 
   // Called from the BLE host task when an input report arrives.
   void onReport(uint16_t attrHandle, const uint8_t* data, uint16_t len);
-  // Called from the BLE host task for each advertising report seen.
-  void onDiscovered(const uint8_t addr[6], uint8_t addrType, const char* name);
+  // Called from the BLE host task for each advertising report seen. isHid = the
+  // report advertised the HID service/appearance; a new list entry is only added
+  // for HID reports, but a name is backfilled for any already-known address.
+  void onDiscovered(const uint8_t addr[6], uint8_t addrType, const char* name, bool isHid);
 
   // NimBLE needs a C-callable notify hook; it forwards to the singleton.
   friend int bleHidHostGapEvent(struct ble_gap_event* event, void* arg);

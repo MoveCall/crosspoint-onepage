@@ -13,6 +13,9 @@ lib/I18n/I18nStrings.h
 lib/I18n/I18nStrings.cpp
 *.generated.h
 .vs
+# Release workflow artifacts (built in CI, or by a local dry-run of the merge/manifest step).
+/manifest.json
+onepage-firmware-*.bin
 build
 **/__pycache__/
 /compile_commands.json

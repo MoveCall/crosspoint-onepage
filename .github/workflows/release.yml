@@ -1,11 +1,21 @@
-name: Compile Release
+name: Release firmware (web flasher)
+
+# On pushing a version tag (v*), build with PlatformIO, merge into a single
+# flashable 0x0 image named with the version, generate the esp-web-tools
+# manifest, and publish both as assets on a GitHub Release. The website's
+# firmware page reads releases/latest/download/manifest.json and needs no
+# changes per release.
+
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
-  build-release:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -16,14 +26,21 @@ jobs:
         with:
           python-version: '3.14'
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
           enable-cache: false
 
-      - name: Install PlatformIO Core
-        run: uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+      - name: Install PlatformIO Core + esptool
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          # esptool v5 provides `merge-bin` and recognises ESP32-C61.
+          uv pip install --system -U esptool
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -32,16 +49,29 @@ jobs:
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
-      - name: Build CrossPoint
-        run: pio run -e gh_release
+      - name: Build (env:onepage, ESP32-C61)
+        run: pio run -e onepage
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Merge into a single 0x0 flash image
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          BIN="onepage-firmware-${VERSION}.bin"
+          # Offsets match partitions.csv and the hardware-verified local merge:
+          # bootloader @ 0x0, partition table @ 0x8000, app @ 0x10000.
+          python -m esptool --chip esp32c61 merge-bin -o "${BIN}" \
+            --flash-mode dio --flash-freq 80m --flash-size 16MB \
+            0x0 .pio/build/onepage/bootloader.bin \
+            0x8000 .pio/build/onepage/partitions.bin \
+            0x10000 .pio/build/onepage/firmware.bin
+          echo "BIN=${BIN}" >> "$GITHUB_ENV"
+
+      - name: Generate manifest.json
+        run: node .github/gen-manifest.mjs --version "${GITHUB_REF_NAME}" --bin "${BIN}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          name: CrossPoint-${{ github.ref_name }}
-          path: |
-            .pio/build/gh_release/bootloader.bin
-            .pio/build/gh_release/firmware.bin
-            .pio/build/gh_release/firmware.elf
-            .pio/build/gh_release/firmware.map
-            .pio/build/gh_release/partitions.bin
+          files: |
+            ${{ env.BIN }}
+            manifest.json

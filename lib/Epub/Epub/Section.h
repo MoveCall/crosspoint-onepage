@@ -38,7 +38,7 @@ class Section {
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          uint8_t imageRendering, bool focusReadingEnabled,
-                         const std::function<void()>& popupFn = nullptr);
+                         const std::function<void(size_t, size_t)>& popupFn = nullptr);
   std::unique_ptr<Page> loadPageFromSectionFile();
   std::string getTextFromSectionFile();
 

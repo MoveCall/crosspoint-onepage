@@ -25,6 +25,7 @@
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
+#include "IndexingProgress.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
@@ -859,9 +860,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                                   SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
       LOG_DBG("ERS", "Cache not found, building...");
 
-      GUI.drawPopup(renderer, tr(STR_INDEXING));
-
-      const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
+      IndexingProgress indexingProgress(renderer);
+      const auto popupFn = [&indexingProgress](size_t current, size_t total) {
+        indexingProgress.update(current, total);
+      };
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
@@ -872,6 +874,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         showPendingSyncSaveError();
         return;
       }
+      indexingProgress.finish();
     } else {
       LOG_DBG("ERS", "Cache found, skipping build...");
     }

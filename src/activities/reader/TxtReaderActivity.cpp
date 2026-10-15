@@ -12,6 +12,7 @@
 #include "CrossPointState.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
+#include "IndexingProgress.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
 #include "components/UITheme.h"
@@ -142,7 +143,7 @@ void TxtReaderActivity::buildPageIndex() {
 
   LOG_DBG("TRS", "Building page index for %zu bytes...", fileSize);
 
-  GUI.drawPopup(renderer, tr(STR_INDEXING));
+  IndexingProgress indexingProgress(renderer);
 
   while (offset < fileSize) {
     std::vector<std::string> tempLines;
@@ -158,6 +159,7 @@ void TxtReaderActivity::buildPageIndex() {
     }
 
     offset = nextOffset;
+    indexingProgress.update(offset, fileSize);
     if (offset < fileSize) {
       pageOffsets.push_back(offset);
     }
@@ -169,6 +171,7 @@ void TxtReaderActivity::buildPageIndex() {
   }
 
   totalPages = pageOffsets.size();
+  if (offset >= fileSize) indexingProgress.finish();
   LOG_DBG("TRS", "Built page index: %d pages", totalPages);
 }
 

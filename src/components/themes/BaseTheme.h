@@ -206,7 +206,7 @@ class BaseTheme {
   virtual void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
                               const std::function<std::string(int index)>& buttonLabel,
                               const std::function<UIIcon(int index)>& rowIcon) const;
-  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
+  virtual Rect drawPopup(const GfxRenderer& renderer, const char* message, bool refresh = true) const;
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                      std::string title, const int paddingBottom = 0, const int textYOffset = 0,

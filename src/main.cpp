@@ -567,6 +567,7 @@ void loop() {
   if (Serial && millis() - lastMemPrint >= 10000) {
     LOG_INF("MEM", "Free: %d bytes, Total: %d bytes, Min Free: %d bytes, MaxAlloc: %d bytes", ESP.getFreeHeap(),
             ESP.getHeapSize(), ESP.getMinFreeHeap(), ESP.getMaxAllocHeap());
+    LOG_INF("MEM", "PSRAM total: %u bytes, free: %u bytes", ESP.getPsramSize(), ESP.getFreePsram());
     lastMemPrint = millis();
   }
 
